@@ -19,6 +19,8 @@
 #include "usb/vcp.hpp"
 #include "usb/usb_host.h"
 
+#include "driver/gpio.h"
+
 using namespace esp_usb;
 
 // Change these values to match your needs
@@ -106,6 +108,14 @@ extern "C" void app_main(void)
 {
     device_disconnected_sem = xSemaphoreCreateBinary();
     assert(device_disconnected_sem);
+
+    // Enable power from the USB Dev port to the USB Host port
+    gpio_set_direction(GPIO_NUM_12, GPIO_MODE_OUTPUT);
+    gpio_set_direction(GPIO_NUM_17, GPIO_MODE_OUTPUT);
+    gpio_set_direction(GPIO_NUM_18, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_12, 1); // DEV_VBUS_EN
+    gpio_set_level(GPIO_NUM_17, 1); // IDEV_LIMIT_EN
+    gpio_set_level(GPIO_NUM_18, 1); // USB_SEL
 
     // Install USB Host driver. Should only be called once in entire application
     ESP_LOGI(TAG, "Installing USB Host");
