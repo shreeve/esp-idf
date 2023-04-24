@@ -18,6 +18,8 @@
 #include "usb/usb_host.h"
 #include "usb/cdc_acm_host.h"
 
+#include "driver/gpio.h"
+
 #define EXAMPLE_USB_HOST_PRIORITY   (20)
 #define EXAMPLE_USB_DEVICE_VID      (0x303A)
 #define EXAMPLE_USB_DEVICE_PID      (0x4001) // 0x303A:0x4001 (TinyUSB CDC device)
@@ -102,6 +104,14 @@ static void usb_lib_task(void *arg)
  */
 void app_main(void)
 {
+    // Enable power from the USB Dev port to the USB Host port
+    gpio_set_direction(GPIO_NUM_12, GPIO_MODE_OUTPUT);
+    gpio_set_direction(GPIO_NUM_17, GPIO_MODE_OUTPUT);
+    gpio_set_direction(GPIO_NUM_18, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_12, 1); // DEV_VBUS_EN
+    gpio_set_level(GPIO_NUM_17, 1); // IDEV_LIMIT_EN
+    gpio_set_level(GPIO_NUM_18, 1); // USB_SEL
+
     device_disconnected_sem = xSemaphoreCreateBinary();
     assert(device_disconnected_sem);
 
