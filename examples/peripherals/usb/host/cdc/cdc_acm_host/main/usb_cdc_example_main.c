@@ -169,9 +169,9 @@ void app_main(void)
                  line_coding.dwDTERate, line_coding.bCharFormat, line_coding.bParityType, line_coding.bDataBits);
 
         line_coding.dwDTERate = 9600;
-        line_coding.bDataBits = 7;
-        line_coding.bParityType = 1;
-        line_coding.bCharFormat = 1;
+        line_coding.bDataBits = 8;
+        line_coding.bParityType = 0;
+        line_coding.bCharFormat = 0;
         ESP_ERROR_CHECK(cdc_acm_host_line_coding_set(cdc_dev, &line_coding));
         ESP_LOGI(TAG, "Line Set: Rate: %"PRIu32", Stop bits: %"PRIu8", Parity: %"PRIu8", Databits: %"PRIu8"",
                  line_coding.dwDTERate, line_coding.bCharFormat, line_coding.bParityType, line_coding.bDataBits);
