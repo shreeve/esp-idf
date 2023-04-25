@@ -1,189 +1,162 @@
-/*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: CC0-1.0
- */
-
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
-#include "esp_system.h"
-#include "esp_log.h"
-#include "esp_err.h"
-
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/semphr.h"
-
-#include "usb/usb_host.h"
-#include "usb/cdc_acm_host.h"
 
 #include "driver/gpio.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "usb/cdc_acm_host.h"
+#include "usb/usb_host.h"
 
-#define EXAMPLE_USB_HOST_PRIORITY   (20)
-#define EXAMPLE_USB_DEVICE_VID      (0x0403) // FTDI
-#define EXAMPLE_USB_DEVICE_PID      (0xcd18) // FT232: Abaxis Piccolo Xpress
-#define EXAMPLE_USB_DEVICE_DUAL_PID (0xcd18) // FT232: Abaxis Piccolo Xpress
-#define EXAMPLE_TX_STRING           ("CDC test string!")
-#define EXAMPLE_TX_TIMEOUT_MS       (1000)
+#define USB_HOST_PRIORITY (20)
+#define USB_DEVICE_VID    (0x0403) // FTDI
+#define USB_DEVICE_PID    (0xcd18) // FT232: Abaxis Piccolo Xpress
 
-static const char *TAG = "USB-CDC";
+static const char *TAG = "TRUST";
+
 static SemaphoreHandle_t device_disconnected_sem;
 
-/**
- * @brief Data received callback
- *
- * @param[in] data     Pointer to received data
- * @param[in] data_len Length of received data in bytes
- * @param[in] arg      Argument we passed to the device open function
- * @return
- *   true:  We have processed the received data
- *   false: We expect more data
- */
-static bool handle_rx(const uint8_t *data, size_t data_len, void *arg)
-{
-    ESP_LOGI(TAG, "Data received");
-    ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_INFO);
-    return true;
+// enable power from the USB Dev port to the USB Host port
+static void enable_usb_host_power(void) {
+  gpio_set_direction(GPIO_NUM_12, GPIO_MODE_OUTPUT);
+  gpio_set_direction(GPIO_NUM_17, GPIO_MODE_OUTPUT);
+  gpio_set_direction(GPIO_NUM_18, GPIO_MODE_OUTPUT);
+  gpio_set_level(GPIO_NUM_12, 1); // DEV_VBUS_EN
+  gpio_set_level(GPIO_NUM_17, 1); // IDEV_LIMIT_EN
+  gpio_set_level(GPIO_NUM_18, 1); // USB_SEL
 }
 
-/**
- * @brief Device event callback
- *
- * Apart from handling device disconnection it doesn't do anything useful
- *
- * @param[in] event    Device event type and data
- * @param[in] user_ctx Argument we passed to the device open function
- */
-static void handle_event(const cdc_acm_host_dev_event_data_t *event, void *user_ctx)
-{
-    switch (event->type) {
-        case CDC_ACM_HOST_ERROR:
-            ESP_LOGE(TAG, "CDC-ACM error has occurred, err_no = %i", event->data.error);
-            break;
-        case CDC_ACM_HOST_DEVICE_DISCONNECTED:
-            ESP_LOGI(TAG, "Device suddenly disconnected");
-            ESP_ERROR_CHECK(cdc_acm_host_close(event->data.cdc_hdl));
-            xSemaphoreGive(device_disconnected_sem);
-            break;
-        case CDC_ACM_HOST_SERIAL_STATE:
-            ESP_LOGI(TAG, "Serial state notif 0x%04X", event->data.serial_state.val);
-            break;
-        case CDC_ACM_HOST_NETWORK_CONNECTION:
-        default:
-            ESP_LOGW(TAG, "Unsupported CDC event: %i", event->type);
-            break;
+// usb library task
+static void usb_lib_task(void *arg) {
+  while (true) {
+    uint32_t event_flags;
+    usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
+    if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
+      ESP_ERROR_CHECK(usb_host_device_free_all());
     }
+    if (event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
+      ESP_LOGI(TAG, "USB: All devices freed");
+    }
+  }
 }
 
-/**
- * @brief USB Host library handling task
- *
- * @param arg Unused
- */
-static void usb_lib_task(void *arg)
-{
-    while (1) {
-        // Start handling system events
-        uint32_t event_flags;
-        usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
-        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
-            ESP_ERROR_CHECK(usb_host_device_free_all());
-        }
-        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
-            ESP_LOGI(TAG, "USB: All devices freed");
-            // Continue handling USB events to allow device reconnection
-        }
-    }
+// setup usb host
+static void setup_usb_host(void) {
+
+  // install usb host (once per application)
+  ESP_LOGI(TAG, "Installing USB Host");
+  const usb_host_config_t host_config = {
+    .skip_phy_setup = false,
+    .intr_flags     = ESP_INTR_FLAG_LEVEL1,
+  };
+  ESP_ERROR_CHECK(usb_host_install(&host_config));
+
+  // setup usb library task
+  BaseType_t task_created = xTaskCreate(usb_lib_task, "usb_lib", 4096,
+    xTaskGetCurrentTaskHandle(), USB_HOST_PRIORITY, NULL
+  );
+  assert(task_created == pdTRUE);
+
+  // install CDC-ACM driver
+  ESP_LOGI(TAG, "Installing CDC-ACM driver");
+  ESP_ERROR_CHECK(cdc_acm_host_install(NULL));
 }
 
-/**
- * @brief Main application
- *
- * Here we open a USB CDC device and send some data to it
- */
-void app_main(void)
-{
-    // Enable power from the USB Dev port to the USB Host port
-    gpio_set_direction(GPIO_NUM_12, GPIO_MODE_OUTPUT);
-    gpio_set_direction(GPIO_NUM_17, GPIO_MODE_OUTPUT);
-    gpio_set_direction(GPIO_NUM_18, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_NUM_12, 1); // DEV_VBUS_EN
-    gpio_set_level(GPIO_NUM_17, 1); // IDEV_LIMIT_EN
-    gpio_set_level(GPIO_NUM_18, 1); // USB_SEL
+// create semaphore to handle device disconnection
+static void create_disconnect_sem(void) {
+  device_disconnected_sem = xSemaphoreCreateBinary();
+  assert(device_disconnected_sem);
+}
 
-    device_disconnected_sem = xSemaphoreCreateBinary();
-    assert(device_disconnected_sem);
+// data received callback
+static bool data_cb(const uint8_t *data, size_t size, void *arg) {
+  if (size > 2) {
+    ESP_LOG_BUFFER_HEXDUMP(TAG, data + 2, size - 2, ESP_LOG_INFO);
+  }
+  return true;
+}
 
-    // Install USB Host driver. Should only be called once in entire application
-    ESP_LOGI(TAG, "Installing USB Host");
-    const usb_host_config_t host_config = {
-        .skip_phy_setup = false,
-        .intr_flags = ESP_INTR_FLAG_LEVEL1,
-    };
-    ESP_ERROR_CHECK(usb_host_install(&host_config));
+// device event callback
+static void event_cb(const cdc_acm_host_dev_event_data_t *event, void *arg) {
+  if (event->type == CDC_ACM_HOST_DEVICE_DISCONNECTED) {
+    ESP_LOGI(TAG, "Device disconnected");
+    ESP_ERROR_CHECK(cdc_acm_host_close(event->data.cdc_hdl));
+    xSemaphoreGive(device_disconnected_sem);
+  } else {
+    ESP_LOGW(TAG, "Unsupported CDC event: %i", event->type);
+  }
+}
 
-    // Create a task that will handle USB library events
-    BaseType_t task_created = xTaskCreate(usb_lib_task, "usb_lib", 4096, xTaskGetCurrentTaskHandle(), EXAMPLE_USB_HOST_PRIORITY, NULL);
-    assert(task_created == pdTRUE);
+void app_main(void) {
 
-    ESP_LOGI(TAG, "Installing CDC-ACM driver");
-    ESP_ERROR_CHECK(cdc_acm_host_install(NULL));
+  // prepare environment
+  enable_usb_host_power();
+  setup_usb_host();
+  create_disconnect_sem();
 
-    const cdc_acm_host_device_config_t dev_config = {
-        .connection_timeout_ms = 1000,
-        .out_buffer_size = 512,
-        .in_buffer_size = 512,
-        .user_arg = NULL,
-        .event_cb = handle_event,
-        .data_cb = handle_rx
-    };
+  // device config
+  const cdc_acm_host_device_config_t dev_config = {
+    .connection_timeout_ms = 1000,
+    .out_buffer_size       = 512,
+    .in_buffer_size        = 512,
+    .user_arg              = NULL,
+    .event_cb              = event_cb,
+    .data_cb               = data_cb,
+  };
 
-    while (true) {
-        cdc_acm_dev_hdl_t cdc_dev = NULL;
+  while (true) {
 
-        // Open USB device from tusb_serial_device example example. Either single or dual port configuration.
-        ESP_LOGI(TAG, "Opening CDC ACM device 0x%04X:0x%04X...", EXAMPLE_USB_DEVICE_VID, EXAMPLE_USB_DEVICE_PID);
-        esp_err_t err = cdc_acm_host_open_vendor_specific(EXAMPLE_USB_DEVICE_VID, EXAMPLE_USB_DEVICE_PID, 0, &dev_config, &cdc_dev);
-        if (ESP_OK != err) {
-            // ESP_LOGI(TAG, "Opening CDC ACM device 0x%04X:0x%04X...", EXAMPLE_USB_DEVICE_VID, EXAMPLE_USB_DEVICE_DUAL_PID);
-            // err = cdc_acm_host_open(EXAMPLE_USB_DEVICE_VID, EXAMPLE_USB_DEVICE_DUAL_PID, 0, &dev_config, &cdc_dev);
-            // if (ESP_OK != err) {
-                ESP_LOGI(TAG, "Failed to open device");
-                continue;
-            // }
-        }
-        cdc_acm_host_desc_print(cdc_dev);
-        vTaskDelay(pdMS_TO_TICKS(100));
+    // attempt to open device
+    cdc_acm_dev_hdl_t cdc_dev = NULL;
+    esp_err_t err = cdc_acm_host_open_vendor_specific(
+      USB_DEVICE_VID, USB_DEVICE_PID, 0, &dev_config, &cdc_dev
+    );
 
-        // Test sending and receiving: responses are handled in handle_rx callback
-        ESP_ERROR_CHECK(cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)EXAMPLE_TX_STRING, strlen(EXAMPLE_TX_STRING), EXAMPLE_TX_TIMEOUT_MS));
-        vTaskDelay(pdMS_TO_TICKS(100));
-
-        // Test Line Coding commands: Get current line coding, change it 9600 7N1 and read again
-        ESP_LOGI(TAG, "Setting up line coding");
-
-        cdc_acm_line_coding_t line_coding;
-        ESP_ERROR_CHECK(cdc_acm_host_line_coding_get(cdc_dev, &line_coding));
-        ESP_LOGI(TAG, "Line Get: Rate: %"PRIu32", Stop bits: %"PRIu8", Parity: %"PRIu8", Databits: %"PRIu8"",
-                 line_coding.dwDTERate, line_coding.bCharFormat, line_coding.bParityType, line_coding.bDataBits);
-
-        line_coding.dwDTERate = 9600;
-        line_coding.bDataBits = 8;
-        line_coding.bParityType = 0;
-        line_coding.bCharFormat = 0;
-        ESP_ERROR_CHECK(cdc_acm_host_line_coding_set(cdc_dev, &line_coding));
-        ESP_LOGI(TAG, "Line Set: Rate: %"PRIu32", Stop bits: %"PRIu8", Parity: %"PRIu8", Databits: %"PRIu8"",
-                 line_coding.dwDTERate, line_coding.bCharFormat, line_coding.bParityType, line_coding.bDataBits);
-
-        ESP_ERROR_CHECK(cdc_acm_host_line_coding_get(cdc_dev, &line_coding));
-        ESP_LOGI(TAG, "Line Get: Rate: %"PRIu32", Stop bits: %"PRIu8", Parity: %"PRIu8", Databits: %"PRIu8"",
-                 line_coding.dwDTERate, line_coding.bCharFormat, line_coding.bParityType, line_coding.bDataBits);
-
-        ESP_ERROR_CHECK(cdc_acm_host_set_control_line_state(cdc_dev, true, false));
-
-        // We are done. Wait for device disconnection and start over
-        ESP_LOGI(TAG, "Example finished successfully! You can reconnect the device to run again.");
-        xSemaphoreTake(device_disconnected_sem, portMAX_DELAY);
+    // handle error
+    if (ESP_OK != err) {
+      ESP_LOGI(TAG, "Unable to open device, trying again");
+      continue;
     }
+
+    // celebrate success
+    ESP_LOGI(TAG, "Connected to the Abaxis Piccolo Xpress");
+    cdc_acm_host_desc_print(cdc_dev);
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // reset the connection
+    cdc_acm_host_send_custom_request(cdc_dev, 0x40, 0,      0, 1, 0, 0); // reset both
+    cdc_acm_host_send_custom_request(cdc_dev, 0x40, 0,      2, 1, 0, 0); // reset TX
+    cdc_acm_host_send_custom_request(cdc_dev, 0x40, 0,      1, 1, 0, 0); // reset RX
+    cdc_acm_host_send_custom_request(cdc_dev, 0x40, 2,      0, 1, 0, 0); // set flow control (none)
+    cdc_acm_host_send_custom_request(cdc_dev, 0x40, 9,     16, 1, 0, 0); // set latency to 16ms
+    cdc_acm_host_send_custom_request(cdc_dev, 0x40, 3, 0x4138, 1, 0, 0); // 9600 baud (3MHz/312.5)
+    cdc_acm_host_send_custom_request(cdc_dev, 0x40, 1, 0x0303, 1, 0, 0); // enable DTR/RTS
+    cdc_acm_host_send_custom_request(cdc_dev, 0x40, 2, 0x1311, 1, 0, 0); // set flow control (XON=0x11, XOFF=0x13)
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    // wait for the device to disconnect, then start over
+    xSemaphoreTake(device_disconnected_sem, portMAX_DELAY);
+  }
 }
