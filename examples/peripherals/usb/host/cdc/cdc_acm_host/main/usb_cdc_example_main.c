@@ -136,24 +136,26 @@ void app_main(void) {
     cdc_acm_host_send_custom_request(cdc_dev, 0x40, 3, 0x4138, 1, 0, 0); // 9600 baud (3MHz/312.5)
     cdc_acm_host_send_custom_request(cdc_dev, 0x40, 1, 0x0303, 1, 0, 0); // enable DTR/RTS
     cdc_acm_host_send_custom_request(cdc_dev, 0x40, 2, 0x1311, 1, 0, 0); // set flow control (XON=0x11, XOFF=0x13)
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    // enter the ASTM loop
+
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *) "\x06", 1, 1000); // ACK see if we get some info from the Piccolo
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *) "\x06", 1, 1000); // ACK see if we get some info from the Piccolo
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *) "\x06", 1, 1000); // ACK see if we get some info from the Piccolo
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *) "\x06", 1, 1000); // ACK see if we get some info from the Piccolo
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *) "\x06", 1, 1000); // ACK see if we get some info from the Piccolo
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
-    vTaskDelay(pdMS_TO_TICKS(3000));
-
-    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)"\x06", 1, 1000); // ACK see if we get some info from the Piccolo
+    cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *) "\x06", 1, 1000); // ACK see if we get some info from the Piccolo
     vTaskDelay(pdMS_TO_TICKS(3000));
 
     // wait for the device to disconnect, then start over
