@@ -13,13 +13,6 @@ set(includes "include" "${target}")
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${target}/include")
     list(APPEND includes "${target}/include")
-    if(target STREQUAL "esp32h4")
-        if(CONFIG_IDF_TARGET_ESP32H4_BETA_VERSION_1)
-            list(APPEND includes "${target}/include/rev1")
-        elseif(CONFIG_IDF_TARGET_ESP32H4_BETA_VERSION_2)
-            list(APPEND includes "${target}/include/rev2")
-        endif()
-    endif()
 endif()
 
 if(target STREQUAL "esp32")
@@ -90,6 +83,10 @@ if(CONFIG_SOC_MCPWM_SUPPORTED)
     list(APPEND srcs "${target}/mcpwm_periph.c")
 endif()
 
+if(CONFIG_SOC_MPI_SUPPORTED)
+    list(APPEND srcs "${target}/mpi_periph.c")
+endif()
+
 if(CONFIG_SOC_SDMMC_HOST_SUPPORTED)
     list(APPEND srcs "${target}/sdmmc_periph.c")
 endif()
@@ -100,6 +97,12 @@ endif()
 
 if(CONFIG_SOC_TWAI_SUPPORTED)
     list(APPEND srcs "${target}/twai_periph.c")
+endif()
+
+if(CONFIG_SOC_IEEE802154_SUPPORTED)
+    if(NOT target STREQUAL "esp32h4")
+        list(APPEND srcs "${target}/ieee802154_periph.c")
+    endif()
 endif()
 
 if(CONFIG_SOC_USB_OTG_SUPPORTED)

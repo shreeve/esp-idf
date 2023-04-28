@@ -367,6 +367,10 @@ config SOC_I2C_FIFO_LEN
     int
     default 32
 
+config SOC_I2C_CMD_REG_NUM
+    int
+    default 16
+
 config SOC_I2C_SUPPORT_SLAVE
     bool
     default y
@@ -827,6 +831,14 @@ config SOC_SHA_SUPPORT_SHA512_T
     bool
     default y
 
+config SOC_MPI_MEM_BLOCKS_NUM
+    int
+    default 4
+
+config SOC_MPI_OPERATIONS_NUM
+    int
+    default 3
+
 config SOC_RSA_MAX_BIT_LEN
     int
     default 4096
@@ -1072,5 +1084,9 @@ config SOC_WIFI_SUPPORT_VARIABLE_BEACON_WINDOW
     default y
 
 config SOC_WIFI_NAN_SUPPORT
+    bool
+    default y
+
+config SOC_ULP_HAS_ADC
     bool
     default y

@@ -6,6 +6,8 @@
 
 #include "esp_openthread_radio.h"
 
+#include "error.h"
+#include "esp_err.h"
 #include "sdkconfig.h"
 #include "esp_check.h"
 #include "esp_ieee802154.h"
@@ -188,13 +190,11 @@ esp_err_t esp_openthread_radio_process(otInstance *aInstance, const esp_openthre
             case ESP_IEEE802154_TX_ERR_CCA_BUSY:
             case ESP_IEEE802154_TX_ERR_ABORT:
             case ESP_IEEE802154_TX_ERR_COEXIST:
-            case ESP_IEEE802154_TX_ERR_COEXIST_REJ:
                 err = OT_ERROR_CHANNEL_ACCESS_FAILURE;
                 break;
 
             case ESP_IEEE802154_TX_ERR_NO_ACK:
             case ESP_IEEE802154_TX_ERR_INVALID_ACK:
-            case ESP_IEEE802154_TX_ERR_COEXIST_ACK:
                 err = OT_ERROR_NO_ACK;
                 break;
 
@@ -298,9 +298,6 @@ otError otPlatRadioTransmit(otInstance *aInstance, otRadioFrame *aFrame)
 
     aFrame->mPsdu[-1] = aFrame->mLength; // lenth locates one byte before the psdu (esp_openthread_radio_tx_psdu);
 
-// TODO: remove this macro check when esp32h4 unsupported.
-#if !CONFIG_IDF_TARGET_ESP32H4
-    // esp32h4 do not support tx security
     if (otMacFrameIsSecurityEnabled(aFrame) && !aFrame->mInfo.mTxInfo.mIsSecurityProcessed) {
         otMacFrameSetFrameCounter(aFrame, s_mac_frame_counter++);
         if (otMacFrameIsKeyIdMode1(aFrame)) {
@@ -314,12 +311,10 @@ otError otPlatRadioTransmit(otInstance *aInstance, otRadioFrame *aFrame)
         esp_ieee802154_set_transmit_security(&aFrame->mPsdu[-1], s_security_key, s_security_addr);
     }
 
-    // esp32h4 do not support transmit at
     if (aFrame->mInfo.mTxInfo.mTxDelay != 0) {
         esp_ieee802154_transmit_at(&aFrame->mPsdu[-1], aFrame->mInfo.mTxInfo.mCsmaCaEnabled,
                                    (aFrame->mInfo.mTxInfo.mTxDelayBaseTime + aFrame->mInfo.mTxInfo.mTxDelay));
     } else
-#endif
     {
         esp_ieee802154_transmit(&aFrame->mPsdu[-1], aFrame->mInfo.mTxInfo.mCsmaCaEnabled);
     }
@@ -342,22 +337,15 @@ int8_t otPlatRadioGetRssi(otInstance *aInstance)
 otRadioCaps otPlatRadioGetCaps(otInstance *aInstance)
 {
     return (otRadioCaps)(OT_RADIO_CAPS_ENERGY_SCAN |
-// TODO: remove this macro check when esp32h4 unsupported.
-#if !CONFIG_IDF_TARGET_ESP32H4
                         OT_RADIO_CAPS_TRANSMIT_SEC | OT_RADIO_CAPS_RECEIVE_TIMING | OT_RADIO_CAPS_TRANSMIT_TIMING |
-#endif
                         OT_RADIO_CAPS_ACK_TIMEOUT | OT_RADIO_CAPS_SLEEP_TO_TX);
 }
 
-// TODO: remove this macro check when esp32h4 unsupported.
-#if !CONFIG_IDF_TARGET_ESP32H4
-// esp32h4 do not support receive at
 otError otPlatRadioReceiveAt(otInstance *aInstance, uint8_t aChannel, uint32_t aStart, uint32_t aDuration)
 {
     esp_ieee802154_receive_at((aStart + aDuration));
     return OT_ERROR_NONE;
 }
-#endif
 
 bool otPlatRadioGetPromiscuous(otInstance *aInstance)
 {
@@ -626,7 +614,7 @@ static void IRAM_ATTR enh_ack_set_security_addr_and_key(otRadioFrame *ack_frame)
     esp_ieee802154_set_transmit_security(&ack_frame->mPsdu[-1], s_security_key, s_security_addr);
 }
 
-void IRAM_ATTR esp_ieee802154_enh_ack_generator(uint8_t *frame, esp_ieee802154_frame_info_t *frame_info,
+esp_err_t IRAM_ATTR esp_ieee802154_enh_ack_generator(uint8_t *frame, esp_ieee802154_frame_info_t *frame_info,
                                                 uint8_t *enhack_frame)
 {
     otRadioFrame ack_frame;
@@ -638,6 +626,7 @@ void IRAM_ATTR esp_ieee802154_enh_ack_generator(uint8_t *frame, esp_ieee802154_f
     uint8_t link_metrics_data[OT_ENH_PROBING_IE_DATA_MAX_SIZE];
     otMacAddress mac_addr;
 #endif
+    otError err;
     ack_frame.mPsdu = enhack_frame + 1;
     convert_to_ot_frame(frame, frame_info, &ot_frame);
 
@@ -655,8 +644,11 @@ void IRAM_ATTR esp_ieee802154_enh_ack_generator(uint8_t *frame, esp_ieee802154_f
         offset += otMacFrameGenerateEnhAckProbingIe(ack_ie_data, link_metrics_data, link_metrics_data_len);
     }
 #endif
+    err = otMacFrameGenerateEnhAck(&ot_frame, frame_info->pending, ack_ie_data, offset, &ack_frame);
 
-    ETS_ASSERT(otMacFrameGenerateEnhAck(&ot_frame, frame_info->pending, ack_ie_data, offset, &ack_frame) == OT_ERROR_NONE);
+    if (err != OT_ERROR_NONE) {
+        return ESP_FAIL;
+    }
     enhack_frame[0] = ack_frame.mLength;
 
     s_enhack = enhack_frame;
@@ -665,6 +657,7 @@ void IRAM_ATTR esp_ieee802154_enh_ack_generator(uint8_t *frame, esp_ieee802154_f
         otMacFrameSetFrameCounter(&ack_frame, s_mac_frame_counter++);
         enh_ack_set_security_addr_and_key(&ack_frame);
     }
+    return ESP_OK;
 }
 
 void IRAM_ATTR esp_ieee802154_receive_done(uint8_t *data, esp_ieee802154_frame_info_t *frame_info)
